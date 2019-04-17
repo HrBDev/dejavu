@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.mlab as mlab
-import matplotlib.pyplot as plt
 from scipy.ndimage.filters import maximum_filter
 from scipy.ndimage.morphology import (generate_binary_structure,
                                       iterate_structure, binary_erosion)
@@ -59,7 +58,11 @@ PEAK_SORT = True
 # Number of bits to throw away from the front of the SHA1 hash in the
 # fingerprint calculation. The more you throw away, the less storage, but
 # potentially higher collisions and misclassifications when identifying songs.
-FINGERPRINT_REDUCTION = 20
+FINGERPRINT_REDUCTION = 40
+
+# SHA1 has 40 hexadecimal chars to encode
+FINGERPRINT_REDUCTION = (40 if FINGERPRINT_REDUCTION > 40 else FINGERPRINT_REDUCTION)
+FINGERPRINT_REDUCTION = (FINGERPRINT_REDUCTION + 1 if FINGERPRINT_REDUCTION % 2 == 1 else FINGERPRINT_REDUCTION)
 
 def fingerprint(channel_samples, Fs=DEFAULT_FS,
                 wsize=DEFAULT_WINDOW_SIZE,
@@ -83,13 +86,13 @@ def fingerprint(channel_samples, Fs=DEFAULT_FS,
     arr2D[arr2D == -np.inf] = 0  # replace infs with zeros
 
     # find local maxima
-    local_maxima = get_2D_peaks(arr2D, plot=False, amp_min=amp_min)
+    local_maxima = get_2D_peaks(arr2D, amp_min=amp_min)
 
     # return hashes
     return generate_hashes(local_maxima, fan_value=fan_value)
 
 
-def get_2D_peaks(arr2D, plot=False, amp_min=DEFAULT_AMP_MIN):
+def get_2D_peaks(arr2D, amp_min=DEFAULT_AMP_MIN):
     # http://docs.scipy.org/doc/scipy/reference/generated/scipy.ndimage.morphology.iterate_structure.html#scipy.ndimage.morphology.iterate_structure
     struct = generate_binary_structure(2, 1)
     neighborhood = iterate_structure(struct, PEAK_NEIGHBORHOOD_SIZE)
@@ -115,17 +118,6 @@ def get_2D_peaks(arr2D, plot=False, amp_min=DEFAULT_AMP_MIN):
     # get indices for frequency and time
     frequency_idx = [x[1] for x in peaks_filtered]
     time_idx = [x[0] for x in peaks_filtered]
-
-    if plot:
-        # scatter of the peaks
-        fig, ax = plt.subplots()
-        ax.imshow(arr2D)
-        ax.scatter(time_idx, frequency_idx)
-        ax.set_xlabel('Time')
-        ax.set_ylabel('Frequency')
-        ax.set_title("Spectrogram")
-        plt.gca().invert_yaxis()
-        plt.show()
 
     return zip(frequency_idx, time_idx)
 

@@ -13,9 +13,12 @@ class BaseRecognizer(object):
 
     def _recognize(self, *data):
         matches = []
+        total_hashes = 0
         for d in data:
-            matches.extend(self.dejavu.find_matches(d, Fs=self.Fs))
-        return self.dejavu.align_matches(matches)
+            extracted_matches = self.dejavu.find_matches(d, Fs=self.Fs)
+            total_hashes += extracted_matches[1]
+            matches.extend(extracted_matches[0])
+        return self.dejavu.align_matches(matches, total_hashes)
 
     def recognize(self):
         pass  # base class does nothing
@@ -26,7 +29,7 @@ class FileRecognizer(BaseRecognizer):
         super(FileRecognizer, self).__init__(dejavu)
 
     def recognize_file(self, filename):
-        frames, self.Fs, file_hash = decoder.read(filename, self.dejavu.limit)
+        frames, self.Fs, file_hash, audio_length = decoder.read(filename, self.dejavu.limit)
 
         t = time.time()
         match = self._recognize(*frames)
@@ -106,6 +109,22 @@ class MicrophoneRecognizer(BaseRecognizer):
             self.process_recording()
         self.stop_recording()
         return self.recognize_recording()
+
+
+class NumpyArrayRecognizer(BaseRecognizer):
+    def __init__(self, dejavu):
+        super(NumpyArrayRecognizer, self).__init__(dejavu)
+
+    def recognize_array(self, frames):
+        t = time.time()
+        match = self._recognize(*frames)
+        t = time.time() - t
+        if match:
+            match['match_time'] = t
+        return match
+
+    def recognize(self, data):
+        return self.recognize_array(data)
 
 
 class NoRecordingError(Exception):

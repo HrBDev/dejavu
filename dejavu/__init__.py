@@ -3,8 +3,7 @@ import dejavu.decoder as decoder
 import fingerprint
 import multiprocessing
 import os
-import traceback
-import sys
+import logging
 
 
 class Dejavu(object):
@@ -15,6 +14,8 @@ class Dejavu(object):
     MATCH_TIME = 'match_time'
     OFFSET = 'offset'
     OFFSET_SECS = 'offset_seconds'
+    AUDIO_LENGTH = 'audio_length'
+    RELATIVE_CONFIDENCE = 'relative_confidence'
 
     def __init__(self, config):
         super(Dejavu, self).__init__()
@@ -58,7 +59,7 @@ class Dejavu(object):
 
             # don't refingerprint already fingerprinted files
             if decoder.unique_hash(filename) in self.songhashes_set:
-                print "%s already fingerprinted, continuing..." % filename
+                logging.getLogger('dejavu').warn("%s already fingerprinted, continuing..." % filename)
                 continue
 
             filenames_to_fingerprint.append(filename)
@@ -74,22 +75,21 @@ class Dejavu(object):
         # Loop till we have all of them
         while True:
             try:
-                song_name, hashes, file_hash = iterator.next()
+                song_name, hashes, file_hash, audio_length = iterator.next()
             except multiprocessing.TimeoutError:
                 continue
             except StopIteration:
                 break
             except:
-                print("Failed fingerprinting")
-                # Print traceback because we can't reraise it here
-                traceback.print_exc(file=sys.stdout)
+                logging.getLogger('dejavu').exception("Failed fingerprinting")
             else:
-                sid = self.db.insert_song(song_name, file_hash)
+                logging.getLogger('dejavu').debug("Inserting " + song_name + " in database")
+                sid = self.db.insert_song(song_name, file_hash, audio_length)
 
                 self.db.insert_hashes(sid, hashes)
                 self.db.set_song_fingerprinted(sid)
                 self.get_fingerprinted_songs()
-
+                logging.getLogger('dejavu').info(song_name + " inserted in database")
         pool.close()
         pool.join()
 
@@ -99,24 +99,31 @@ class Dejavu(object):
         song_name = song_name or songname
         # don't refingerprint already fingerprinted files
         if song_hash in self.songhashes_set:
-            print "%s already fingerprinted, continuing..." % song_name
+            logging.getLogger('dejavu').warn("%s already fingerprinted, continuing..." % song_name)
         else:
-            song_name, hashes, file_hash = _fingerprint_worker(
+            song_name, hashes, file_hash, audio_length = _fingerprint_worker(
                 filepath,
                 self.limit,
                 song_name=song_name
             )
-            sid = self.db.insert_song(song_name, file_hash)
+            logging.getLogger('dejavu').debug("Inserting " + song_name + " in database")
+            sid = self.db.insert_song(song_name, file_hash, audio_length)
 
             self.db.insert_hashes(sid, hashes)
             self.db.set_song_fingerprinted(sid)
             self.get_fingerprinted_songs()
+            logging.getLogger('dejavu').info(song_name + " inserted in database")
 
     def find_matches(self, samples, Fs=fingerprint.DEFAULT_FS):
         hashes = fingerprint.fingerprint(samples, Fs=Fs)
-        return self.db.return_matches(hashes)
+        mapper = {}
+        total_hashes = 0
+        for hash, offset in hashes:
+            mapper[hash.upper()[:fingerprint.FINGERPRINT_REDUCTION]] = offset
+            total_hashes += 1
+        return (self.db.return_matches(mapper), total_hashes)
 
-    def align_matches(self, matches):
+    def align_matches(self, matches, total_hashes):
         """
             Finds hash matches that align in time with other matches and finds
             consensus about which hashes are "true" signal from the audio.
@@ -157,6 +164,8 @@ class Dejavu(object):
             Dejavu.SONG_ID : song_id,
             Dejavu.SONG_NAME : songname,
             Dejavu.CONFIDENCE : largest_count,
+            Dejavu.AUDIO_LENGTH : song.get(Database.AUDIO_LENGTH, None),
+            Dejavu.RELATIVE_CONFIDENCE : (largest_count*100)/float(total_hashes),
             Dejavu.OFFSET : int(largest),
             Dejavu.OFFSET_SECS : nseconds,
             Database.FIELD_FILE_SHA1 : song.get(Database.FIELD_FILE_SHA1, None),}
@@ -177,21 +186,17 @@ def _fingerprint_worker(filename, limit=None, song_name=None):
 
     songname, extension = os.path.splitext(os.path.basename(filename))
     song_name = song_name or songname
-    channels, Fs, file_hash = decoder.read(filename, limit)
+    channels, Fs, file_hash, audio_length = decoder.read(filename, limit)
     result = set()
     channel_amount = len(channels)
 
     for channeln, channel in enumerate(channels):
-        # TODO: Remove prints or change them into optional logging.
-        print("Fingerprinting channel %d/%d for %s" % (channeln + 1,
-                                                       channel_amount,
-                                                       filename))
+        logging.getLogger('dejavu').info("Fingerprinting channel %d/%d for %s" % (channeln + 1, channel_amount, filename))
         hashes = fingerprint.fingerprint(channel, Fs=Fs)
-        print("Finished channel %d/%d for %s" % (channeln + 1, channel_amount,
-                                                 filename))
+        logging.getLogger('dejavu').debug("Finished channel %d/%d for %s" % (channeln + 1, channel_amount, filename))
         result |= set(hashes)
 
-    return song_name, result, file_hash
+    return song_name, result, file_hash, audio_length
 
 
 def chunkify(lst, n):
